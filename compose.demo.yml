@@ -1,0 +1,31 @@
+# Demo overlay: docker compose -f compose.yml -f compose.demo.yml ...
+#
+# Turns the base stack into an isolated, disposable quality-gate environment:
+#   * separate Compose project name, so demo runs never touch the development database volume
+#   * PostgreSQL data on tmpfs: every run starts from the committed schema + seed (deterministic)
+#   * no published app ports: tests reach services by Compose service name (no host port conflicts)
+#   * the ONLY place the demo fault-injection switch is forwarded to the backend
+#   * per-phase artifact directories (artifacts/pass, artifacts/failure, artifacts/recovery, ...)
+
+name: opsdesk-demo
+
+services:
+  db:
+    volumes: !override
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /var/lib/postgresql
+
+  backend:
+    environment:
+      ENABLE_TEST_ENDPOINTS: "true"
+      # none | drop_ticket_write  (default none - see README "Fault injection")
+      FAULT_INJECTION_MODE: ${FAULT_INJECTION_MODE:-none}
+    ports: !reset []
+
+  frontend:
+    ports: !reset []
+
+  tests:
+    environment:
+      PW_ARTIFACT_DIR: /artifacts/${ARTIFACT_PHASE:-latest}

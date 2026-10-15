@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpsDesk Test Reports</title>
+    <style>
+      :root {
+        --bg: #f4f6fb;
+        --surface: #fff;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --muted: #64748b;
+        --pass: #047857;
+        --pass-bg: #d1fae5;
+        --fail: #b91c1c;
+        --fail-bg: #fee2e2;
+        --none-bg: #f1f5f9;
+        --primary: #4f46e5;
+        font-family: Inter, 'Segoe UI', system-ui, -apple-system, Roboto, Arial, sans-serif;
+        color: var(--text);
+        line-height: 1.5;
+      }
+      body { margin: 0; background: var(--bg); }
+      header { background: #111827; color: #fff; padding: 1.75rem 1.5rem; }
+      header h1 { margin: 0; font-size: 1.5rem; }
+      header p { margin: 0.35rem 0 0; color: #cbd5e1; }
+      main { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+      .flow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0 0 1.5rem; color: var(--muted); font-size: 0.9rem; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.05); }
+      .card h2 { margin: 0; font-size: 1.1rem; }
+      .card .expect { margin: 0.2rem 0 0.9rem; color: var(--muted); font-size: 0.85rem; }
+      .badge { display: inline-block; font-size: 0.75rem; font-weight: 700; padding: 0.15rem 0.6rem; border-radius: 999px; background: var(--none-bg); color: var(--muted); }
+      .badge.pass { background: var(--pass-bg); color: var(--pass); }
+      .badge.fail { background: var(--fail-bg); color: var(--fail); }
+      .stats { margin: 0.75rem 0; font-size: 0.9rem; }
+      .failures { margin: 0.5rem 0 0.75rem; padding-left: 1.1rem; font-size: 0.85rem; }
+      .failures li { margin-bottom: 0.4rem; }
+      .links { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+      .links a, .evidence a { font-size: 0.85rem; }
+      a.button { display: inline-block; background: var(--primary); color: #fff; text-decoration: none; padding: 0.45rem 0.85rem; border-radius: 8px; font-weight: 600; }
+      a.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+      .evidence { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.25rem; }
+      .muted { color: var(--muted); }
+      footer { margin-top: 2rem; color: var(--muted); font-size: 0.85rem; }
+      code { background: #e2e8f0; padding: 0.05rem 0.35rem; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>OpsDesk — Playwright Quality Gate Reports</h1>
+      <p>Artifacts produced by the Dockerized end-to-end test runs (served from <code>./artifacts</code>).</p>
+    </header>
+    <main>
+      <p class="flow" aria-label="Demonstration flow">
+        <strong>Demo flow:</strong> Baseline PASS → Controlled regression FAIL (expected) → Recovery PASS
+      </p>
+      <div class="grid" id="phases"></div>
+      <footer>
+        Browse every file: <a href="/reports/">/reports/</a>. In an HTML report, open a failed test and click
+        <em>Trace</em> to replay it step by step (DOM snapshots, network, console).
+      </footer>
+    </main>
+
+    <script>
+      const phases = [
+        { dir: 'pass', title: 'Phase 1 — Baseline', expect: 'Healthy stack. Expected: all tests PASS.', expectFailure: false },
+        { dir: 'failure', title: 'Phase 2 — Controlled regression', expect: 'FAULT_INJECTION_MODE=drop_ticket_write. Expected: E2E-04 FAILS.', expectFailure: true },
+        { dir: 'recovery', title: 'Phase 3 — Recovery', expect: 'Fault removed. Expected: all tests PASS again.', expectFailure: false },
+        { dir: 'latest', title: 'Latest quality-gate run', expect: 'Plain Compose / CI-mode run (./scripts/demo.sh ci).', expectFailure: false },
+      ];
+
+      const el = (tag, attrs = {}, ...children) => {
+        const node = document.createElement(tag);
+        Object.entries(attrs).forEach(([key, value]) => (key === 'class' ? (node.className = value) : node.setAttribute(key, value)));
+        children.flat().forEach((child) => node.append(child));
+        return node;
+      };
+
+      function collectTests(report) {
+        const tests = [];
+        const visit = (suite) => {
+          (suite.specs || []).forEach((spec) =>
+            (spec.tests || []).forEach((test) => tests.push({ title: spec.title, project: test.projectName, status: test.status, result: (test.results || []).at(-1) || {} })),
+          );
+          (suite.suites || []).forEach(visit);
+        };
+        (report.suites || []).forEach(visit);
+        return tests;
+      }
+
+      const toUrl = (path) => path.replace(/^\/artifacts\//, '/reports/').replace(/^\.\.\/artifacts\//, '/reports/');
+
+      async function renderPhase(phase) {
+        const base = `/reports/${phase.dir}`;
+        const card = el('section', { class: 'card', 'aria-labelledby': `h-${phase.dir}` });
+        const badge = el('span', { class: 'badge' }, 'not generated');
+        card.append(el('div', { style: 'display:flex;justify-content:space-between;gap:.5rem;align-items:center' }, el('h2', { id: `h-${phase.dir}` }, phase.title), badge));
+        card.append(el('p', { class: 'expect' }, phase.expect));
+
+        let report;
+        try {
+          const response = await fetch(`${base}/results.json`, { cache: 'no-store' });
+          if (!response.ok) throw new Error();
+          report = await response.json();
+        } catch {
+          card.append(el('p', { class: 'muted' }, 'No results yet for this phase.'));
+          return card;
+        }
+
+        const tests = collectTests(report);
+        const failed = tests.filter((t) => t.status === 'unexpected');
+        const passed = tests.filter((t) => t.status === 'expected' || t.status === 'flaky');
+        const ok = phase.expectFailure ? failed.length > 0 : failed.length === 0;
+        badge.className = `badge ${failed.length ? 'fail' : 'pass'}`;
+        badge.textContent = failed.length ? `FAILED (${failed.length})` : 'PASSED';
+
+        const when = report.stats && report.stats.startTime ? new Date(report.stats.startTime).toLocaleString() : 'unknown time';
+        card.append(el('p', { class: 'stats' }, `${passed.length} passed · ${failed.length} failed · ${tests.length} total · ${when}`));
+        if (phase.expectFailure) {
+          card.append(el('p', { class: 'stats' }, ok ? '✔ Regression detected, as expected.' : '✘ Regression was NOT detected.'));
+        }
+
+        if (failed.length) {
+          const list = el('ul', { class: 'failures' });
+          failed.forEach((t) => {
+            const evidence = el('span', { class: 'evidence' });
+            (t.result.attachments || []).filter((a) => a.path).forEach((a) => evidence.append(el('a', { href: toUrl(a.path) }, a.name)));
+            list.append(el('li', {}, el('strong', {}, t.title), ` (${t.project})`, evidence));
+          });
+          card.append(list);
+        }
+
+        card.append(
+          el('div', { class: 'links' },
+            el('a', { class: 'button', href: `${base}/playwright-report/index.html` }, 'Open HTML report'),
+            el('a', { class: 'button secondary', href: `${base}/` }, 'Files'),
+          ),
+        );
+        // backend.log is written by the demo scripts (not by plain Compose/CI runs).
+        if (phase.dir !== 'latest') {
+          card.lastChild.append(el('a', { class: 'button secondary', href: `${base}/backend.log` }, 'Backend log'));
+        }
+        return card;
+      }
+
+      (async () => {
+        const container = document.getElementById('phases');
+        for (const phase of phases) container.append(await renderPhase(phase));
+      })();
+    </script>
+  </body>
+</html>

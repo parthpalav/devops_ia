@@ -1,0 +1,21 @@
+# Dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local environment (copy .env.example to .env if you want to customise values)
+.env
+
+# Playwright output when running outside Docker
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+
+# Generated test artifacts (directory itself is kept)
+artifacts/*
+!artifacts/.gitkeep
+
+# OS / editor noise
+.DS_Store
+.vscode/
+.idea/

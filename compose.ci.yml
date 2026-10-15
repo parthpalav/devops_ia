@@ -1,0 +1,20 @@
+# CI overlay, applied on top of the demo overlay:
+#   docker compose -f compose.yml -f compose.demo.yml -f compose.ci.yml ...
+#
+# GitHub Actions therefore runs exactly the same images, health checks, dependency graph and
+# Playwright configuration as the local demo. The only differences are CI-specific flags.
+
+name: opsdesk-ci
+
+services:
+  backend:
+    environment:
+      # Always "none" for push/PR runs. Only a manual workflow_dispatch with simulate_regression=true
+      # sets CI_FAULT_INJECTION_MODE (to show a red quality gate on GitHub). A FAULT_INJECTION_MODE
+      # value in the runner/shell environment is deliberately ignored here.
+      FAULT_INJECTION_MODE: ${CI_FAULT_INJECTION_MODE:-none}
+
+  tests:
+    environment:
+      # CI=true -> forbidOnly, a single worker, and no interactive report server.
+      CI: "true"

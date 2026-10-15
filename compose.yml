@@ -1,0 +1,128 @@
+# OpsDesk - base service topology.
+#
+#   db (PostgreSQL) --healthy--> backend (Express) --healthy--> frontend (Nginx + React)
+#                                       \                           /
+#                                        +----- healthy ----------+--> tests (Playwright)
+#
+# Development:   docker compose up --build                (db + backend + frontend)
+# Quality gate:  docker compose up --build --abort-on-container-exit --exit-code-from tests tests
+#
+# Overlays:
+#   compose.demo.yml  - isolated, throw-away demo stack (tmpfs DB, fault-injection switch, per-phase artifacts)
+#   compose.ci.yml    - applied on top of the demo overlay in GitHub Actions (CI=true)
+#
+# `tests` and `report-viewer` are profile-gated so `docker compose up` only starts the application.
+# Naming them explicitly on the command line (e.g. `... up tests`) activates them automatically.
+
+name: opsdesk
+
+x-postgres-env: &postgres-env
+  POSTGRES_DB: ${POSTGRES_DB:-opsdesk}
+  POSTGRES_USER: ${POSTGRES_USER:-opsdesk}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opsdesk_dev_password}
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      <<: *postgres-env
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/<major>/docker.
+      - db-data:/var/lib/postgresql
+      # Schema + deterministic seed, executed only when the data directory is empty.
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1 forces a TCP check, so the temporary socket-only server that runs
+      # the init scripts is NOT reported as ready. Healthy == accepting real connections.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+
+  backend:
+    build: ./backend
+    image: opsdesk-backend:local
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-opsdesk}:${POSTGRES_PASSWORD:-opsdesk_dev_password}@db:5432/${POSTGRES_DB:-opsdesk}
+      JWT_SECRET: ${JWT_SECRET:-demo-only-change-me}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-8080},http://localhost:5173
+      # Local development/test stack: the reset endpoint is enabled explicitly here.
+      # The backend itself defaults to disabled when this variable is absent.
+      ENABLE_TEST_ENDPOINTS: ${ENABLE_TEST_ENDPOINTS:-true}
+      # FAULT_INJECTION_MODE is deliberately NOT forwarded here; only compose.demo.yml can enable it.
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # /health runs `SELECT 1`, so healthy means "API up AND database reachable".
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+
+  frontend:
+    build: ./frontend
+    image: opsdesk-frontend:local
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/index.html"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+      start_interval: 1s
+
+  tests:
+    build: ./e2e
+    image: opsdesk-e2e:local
+    profiles: ["test"]
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    ipc: host
+    # Write artifacts as the invoking host user when HOST_UID/HOST_GID are provided (demo scripts do this).
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    environment:
+      HOME: /tmp
+      CI: ${CI:-false}
+      PLAYWRIGHT_BASE_URL: ${PLAYWRIGHT_BASE_URL:-http://frontend}
+      PW_ARTIFACT_DIR: /artifacts/latest
+      PW_BROWSERS: ${PW_BROWSERS:-chromium}
+      DEMO_USER_EMAIL: ${DEMO_USER_EMAIL:-demo@example.com}
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:-Demo123!}
+    volumes:
+      - ./artifacts:/artifacts
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+
+  report-viewer:
+    build: ./report-viewer
+    image: opsdesk-report-viewer:local
+    profiles: ["report"]
+    ports:
+      - "${REPORT_PORT:-9323}:80"
+    volumes:
+      - ./artifacts:/usr/share/nginx/html/reports:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+      start_interval: 1s
+
+volumes:
+  db-data:

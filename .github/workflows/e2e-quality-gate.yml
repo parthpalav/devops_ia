@@ -1,0 +1,103 @@
+# E2E quality gate.
+#
+# GitHub Actions does NOT install Node.js, PostgreSQL or browsers here. It invokes the same
+# Docker Compose stack that developers run locally (`./scripts/demo.sh ci`), so local and CI
+# test environments are identical:
+#
+#   docker compose -f compose.yml -f compose.demo.yml -f compose.ci.yml \
+#     up --build --abort-on-container-exit --exit-code-from tests tests
+#
+# The Playwright container's exit code becomes the job result: 0 = green, non-zero = red.
+
+name: E2E Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      simulate_regression:
+        description: "Demo only: enable FAULT_INJECTION_MODE=drop_ticket_write to show a red quality gate"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Docker Compose reads COMPOSE_FILE natively, so every step below uses plain `docker compose ...`
+  # with exactly the same files as the local demo (`./scripts/demo.sh ci`).
+  COMPOSE_FILE: compose.yml:compose.demo.yml:compose.ci.yml
+  # Only a manual run with simulate_regression=true can inject the fault; push/PR runs always use "none".
+  CI_FAULT_INJECTION_MODE: ${{ inputs.simulate_regression && 'drop_ticket_write' || 'none' }}
+
+jobs:
+  e2e:
+    name: Playwright E2E (Docker Compose, Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Show Docker versions
+        run: |
+          docker version
+          docker compose version
+          echo "Fault injection mode for this run: ${CI_FAULT_INJECTION_MODE}"
+
+      - name: Run Playwright tests as the runner user (artifacts stay writable)
+        run: |
+          echo "HOST_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
+
+      - name: Build images
+        run: docker compose --profile test build
+
+      # The quality gate. db -> backend -> frontend start in health-check order, then Playwright runs.
+      # No `|| true`: a failing test suite fails this step and therefore the workflow.
+      - name: Run E2E quality gate
+        run: docker compose up --build --abort-on-container-exit --exit-code-from tests tests
+
+      - name: Show service health and logs
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color db backend frontend
+
+      - name: Write job summary
+        if: always()
+        run: |
+          # Reporting only - the pass/fail decision was made by the quality-gate step above.
+          {
+            echo "## Playwright E2E quality gate"
+            echo
+            echo "Fault injection mode: \`${CI_FAULT_INJECTION_MODE}\`"
+            echo
+            echo '```text'
+            docker compose --progress quiet run --rm --no-deps --entrypoint node tests \
+              scripts/summarize-results.mjs /artifacts/latest/results.json || true
+            echo '```'
+            echo
+            echo "Download the **playwright-e2e-report** artifact for the HTML report, screenshots, videos and traces."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e-report
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans
