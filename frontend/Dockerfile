@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ---- Build stage: type-check and bundle the React app ----
 FROM node:24-alpine AS build
 WORKDIR /app

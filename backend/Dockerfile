@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ---- Build stage: compile TypeScript ----
 FROM node:24-alpine AS build
 WORKDIR /app

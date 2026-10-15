@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # Official Playwright image: Node.js + Chromium/Firefox/WebKit + all browser system libraries.
 # PLAYWRIGHT_VERSION MUST equal the @playwright/test version in package.json (checked below).
 ARG PLAYWRIGHT_VERSION=1.64.0
